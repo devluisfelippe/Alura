@@ -1,0 +1,1 @@
+estamos usando o padrão de json schema para validar os dados que vão entrar na api pelo serverless

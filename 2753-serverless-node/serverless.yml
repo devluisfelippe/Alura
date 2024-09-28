@@ -1,0 +1,50 @@
+org: luisfelippe
+app: aws-node-http-api-project
+service: alura-serverless
+frameworkVersion: "3"
+
+params: # parametros de funcao são como variaveis de ambiente, o serverless tem as aplicações e serviços, todas as func conseguem acessar
+  default:
+    dbName: alura-serverless
+  dev:
+    connectionString: mongodb://localhost:27017/${self:params.default.dbName} # self posso pegar o próprio parametros
+    salt: ZgTofSQ4M59zgg7ez5tevWhojpm6W2Ae
+    jwtToken: ZgTofSQ4M59zgg7ez5tevWhojpm6W2Ae
+  prod:
+
+provider:
+  httpApi:
+    cors: true
+  name: aws
+  runtime: nodejs18.x
+  environment:
+    MONGODB_CONNECTIONSTRING: ${param:connectionString}
+    MONGODB_DB_NAME: ${param:dbName}
+    SALT: ${param:salt}
+    JWT_SECRET: ${param:jwtToken}
+
+functions:
+  sendResponse:
+    handler: api/handlers.sendReponse
+    events:
+      - httpApi:
+          path: /api/results
+          method: post
+          # request:
+          #  schemas:
+          #    application/json: ${file./schemas/sendResponse.json}
+  getResult:
+    handler: api/handlers.getResult
+    events:
+      - httpApi:
+          path: /api/results/{id}
+          method: get
+  login:
+    handler: api/handlers.login
+    events:
+      - httpApi:
+          path: /api/login
+          method: post
+
+plugins:
+  - serverless-offline
