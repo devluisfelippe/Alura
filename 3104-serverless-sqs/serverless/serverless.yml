@@ -1,0 +1,174 @@
+org: aquijuz
+app: serverless-3
+service: serverless-3
+frameworkVersion: '3'
+
+resources:
+  extensions:
+    S3BucketAlunoscsv:
+      Properties:
+        CorsConfiguration:
+          CorsRules:
+            - AllowedMethods:
+                - POST
+                - PUT
+                - GET
+                - HEAD
+              AllowedOrigins:
+                - "*"
+              AllowedHeaders:
+                - "*"
+  Resources:
+    FilaCadastro:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: cadastro.fifo
+        FifoQueue: true
+        SqsManagedSseEnabled: false
+        RedrivePolicy: #Politica de tentativas caso erro
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - DlqCadastro
+              - Arn
+          maxReceiveCount: 5 #Número de tentativas antes de mandar para DLQ
+        VisibilityTimeout: 10 #Quantidade de tempo que o sistema vai esperar antes da próxima tentativa
+
+    FilaEmailConfirmacao:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: emailconfirma.fifo
+        FifoQueue: true
+        SqsManagedSseEnabled: false
+        # RedrivePolicy:
+        #   deadLetterTargetArn:
+        #     Fn::GetAtt:
+        #       - DlqCadastro
+        #       - Arn
+        #   maxReceiveCount: 5 
+        VisibilityTimeout: 10
+
+    DlqCadastro: #A DLQ é apenas outra fila
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: cadastro-dlq.fifo
+        FifoQueue: true
+        SqsManagedSseEnabled: false
+        MessageRetentionPeriod: 86400 #tempo para reter a mensagem antes de deletar de fato
+
+params:
+  dev:
+    bucket: alunos-csv-local
+  prod:
+    bucket: alunos-csv
+
+provider:
+  httpApi:
+    cors:
+      allowedOrigins:
+        - '*'
+      allowedHeaders:
+        - Content-Type
+        - Access-Control-Allow-Origin
+        - Access-Control-Allow-Headers
+        - Access-Control-Allow-Methods
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+  logs:
+    httpApi: true
+
+  name: aws
+  runtime: nodejs18.x
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: 
+            - s3:GetObject
+          Resource: 
+            - arn:aws:s3:::alunos-csv/*
+        - Effect: Allow
+          Action: 
+            - sqs:*
+          Resource: 
+            Fn::GetAtt: [FilaCadastro, Arn]
+        - Effect: Allow
+          Action: 
+            - sqs:*
+          Resource: 
+            Fn::GetAtt: [FilaEmailConfirmacao, Arn]
+  environment:
+    STAGE: ${sls:stage}
+    ACCESS_KEY_ID: ${param:ACCESS_KEY_ID}
+    SECRET_ACCESS_KEY: ${param:SECRET_ACCESS_KEY}
+    SQS_QUEUE_CADASTRO_URL: { Ref: FilaCadastro }
+    SQS_QUEUE_EMAIL_CONFIRMA_URL: { Ref: FilaEmailConfirmacao }
+
+functions:
+  extraiDadosCsv:
+    handler: src/functions/extratorCSV/index.extraiDadosCsv
+    events:
+      - s3:
+          bucket: alunos-csv
+          event: s3:ObjectCreated:*
+          rules:
+            - suffix: .csv
+
+  simulandoUploadDoCsv:
+    handler: src/functions/extratorCSV/local/index.simulandoUploadDoCsv
+    events:
+      - httpApi:
+          path: /alunos/batch
+          method: post
+    enabled: false
+
+  enviarUrlPreassinada:
+    handler: src/functions/presignedUrl/index.enviarUrlPreassinada
+    events:
+      - httpApi:
+          path: /alunos/presignedurl
+          method: post
+
+  cadastroConsumer:
+    handler: src/functions/consumers/cadastroConsumer.cadastroConsumer #O handler reage ao evento da fila SQS
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - FilaCadastro
+              - Arn
+          batchSize: 1
+    timeout: 2 #o tempo de visibilidade da função, tempo máximo de execução da Lambda
+
+  enviaEmailNoCadastro:
+    handler: src/functions/enviaEmailNoCadastro/index.enviaEmailNoCadastro
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - FilaEmailConfirmacao
+              - Arn
+          batchSize: 1
+    timeout: 2 
+
+  trataErrorsCadastroConsumer:
+    handler: src/functions/consumers/index.trataErrorsCadastroConsumer
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - DlqCadastro
+              - Arn
+          batchSize: 1
+    timeout: 2 
+  
+custom:
+  serverless-offline:
+    httpPort: 3001
+
+plugins:
+  - serverless-offline
+  - serverless-s3-local
+  - serverless-disable-functions
+  
